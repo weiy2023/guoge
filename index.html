@@ -8,8 +8,8 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<link rel="icon" type="image/png" href="icon.png?v=4">
-<link rel="apple-touch-icon" href="icon.png?v=4">
+<link rel="icon" type="image/png" href="icon.png?v=5">
+<link rel="apple-touch-icon" href="icon.png?v=5">
 <title>果哥每日学习打卡 · 准六年级工作台</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -567,6 +567,14 @@
 </div>
 
 <div class="footer-tip">坚持每日打卡 · 暑假弯道超车 🚀</div>
+
+<!-- 同步按钮 -->
+<div style="margin: 0 16px 16px; padding: 14px; background: #fff; border-radius: 14px; box-shadow: 0 2px 12px rgba(50,60,100,0.04);">
+  <div id="syncStatus" style="font-size: 13px; color: #6b7293; margin-bottom: 10px; min-height: 18px;">正在同步...</div>
+  <div style="display: flex; gap: 8px;">
+    <button id="syncBtn" style="flex: 1; padding: 12px; background: #6c7bff; color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 600;">🔄 刷新同步</button>
+  </div>
+</div>
 <div class="spacer"></div>
 
 <script>
@@ -681,25 +689,34 @@
   async function loadFromCloud() {
     const token = PRESET_TOKEN;
     let cloudText = null;
+    // 通道1:api.github.com(实时无缓存,优先用这个)
     try {
-      const resp = await fetchWithTimeout(JSDELIVR_URL + '?t=' + Date.now(), { cache: 'no-store' }, 8000);
-      if (resp.ok) { const t = await resp.text(); if (t && t.trim().startsWith('{')) cloudText = t; }
+      const resp = await fetchWithTimeout(GH_API_URL, {
+        headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
+      }, 10000);
+      if (resp.ok) { const r = await resp.json(); const t = decodeURIComponent(escape(atob(r.content))); if (t && t.trim()) cloudText = t; }
     } catch(e) {}
+    // 通道2:jsDelivr CDN(国内快,但有缓存,作为回退)
     if (!cloudText) {
       try {
-        const resp = await fetchWithTimeout(GH_API_URL, {
-          headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
-        }, 10000);
-        if (resp.ok) { const r = await resp.json(); const t = decodeURIComponent(escape(atob(r.content))); if (t && t.trim()) cloudText = t; }
+        const resp = await fetchWithTimeout(JSDELIVR_URL + '?t=' + Date.now(), { cache: 'no-store' }, 8000);
+        if (resp.ok) { const t = await resp.text(); if (t && t.trim().startsWith('{')) cloudText = t; }
       } catch(e) {}
     }
     if (!cloudText) throw new Error('云端无数据');
     const cloudData = JSON.parse(cloudText);
-    // 合并:云端 + 本地(本地优先,因为本地可能是刚打的卡)
+    // 云端优先:孩子那边打的卡是最新的,要覆盖本地
+    // 但保留本地比云端新的日期(本地今天刚打的,还没同步上去)
     const localData = getAllData();
-    const merged = Object.assign({}, cloudData, localData);
+    const merged = Object.assign({}, localData, cloudData);
+    // 对于今天的打卡:如果云端有,就用云端的(孩子在平板上打的)
+    if (cloudData[todayKey]) {
+      merged[todayKey] = cloudData[todayKey];
+    }
     localStorage.setItem('guogeData', JSON.stringify(merged));
     restoreTodayFromLocal();
+    // 更新进度环显示
+    updateProgress();
   }
 
   // 打卡点击事件
@@ -731,12 +748,28 @@
 
   // 初始化:先从本地恢复,再静默从云端同步
   restoreTodayFromLocal();
-  // 页面打开时静默从云端拉取(合并,不覆盖本地)
-  loadFromCloud().then(function() {
-    console.log('云端同步完成');
-  }).catch(function(e) {
-    console.log('云端同步跳过:', e.message);
+  // 页面打开时自动从云端拉取最新数据
+  doSync();
+  // 手动同步按钮
+  document.getElementById('syncBtn').addEventListener('click', function() {
+    doSync();
   });
+
+  async function doSync() {
+    const statusEl = document.getElementById('syncStatus');
+    statusEl.textContent = '正在从云端同步...';
+    statusEl.style.color = '#6c7bff';
+    try {
+      await loadFromCloud();
+      const todayTasks = getTodayTasks();
+      const done = Object.values(todayTasks).filter(function(v){return v;}).length;
+      statusEl.textContent = '✅ 已同步(' + new Date().toLocaleTimeString('zh-CN') + ')· 今日完成 ' + done + '/' + total;
+      statusEl.style.color = '#1aa260';
+    } catch(e) {
+      statusEl.textContent = '⚠️ 同步失败:' + e.message + '(打卡仍可正常使用,数据存在本地)';
+      statusEl.style.color = '#ff8800';
+    }
+  }
 </script>
 
 </body>
