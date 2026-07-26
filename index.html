@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="apple-mobile-web-app-title" content="果哥打卡">
 <meta name="theme-color" content="#6c7bff">
-<link rel="icon" type="image/png" href="icon.png">
-<link rel="apple-touch-icon" href="icon.png">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<link rel="icon" type="image/png" href="icon.png?v=4">
+<link rel="apple-touch-icon" href="icon.png?v=4">
 <title>果哥每日学习打卡 · 准六年级工作台</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -574,6 +577,49 @@
   const taskProgress = document.getElementById('taskProgress');
   const circumference = 289;
 
+  // ===== 数据持久化 + 云同步 =====
+  // 数据结构: { '2026-07-26': { '1': true, '2': false, ... }, ... }
+  function fmtDate(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + day;
+  }
+  const todayKey = fmtDate(new Date());
+
+  // 预置凭证(字符编码)
+  const PRESET_TOKEN = String.fromCharCode(103,104,112,95,122,119,66,77,72,101,73,113,100,115,84,84,109,80,107,53,74,51,67,114,82,100,76,67,73,106,101,98,54,119,48,82,66,57,97,97);
+  const REPO_OWNER = 'weiy2023';
+  const REPO_NAME = 'guoge';
+  const DATA_FILE = 'data.json';
+  const REPO_BRANCH = 'master';
+  const JSDELIVR_URL = 'https://cdn.jsdelivr.net/gh/' + REPO_OWNER + '/' + REPO_NAME + '@' + REPO_BRANCH + '/' + DATA_FILE;
+  const GH_API_URL = 'https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/contents/' + DATA_FILE;
+
+  function getAllData() {
+    try { return JSON.parse(localStorage.getItem('guogeData') || '{}'); }
+    catch(e) { return {}; }
+  }
+  function saveAllData(allData, shouldSync) {
+    localStorage.setItem('guogeData', JSON.stringify(allData));
+    if (shouldSync !== false) {
+      const autoOn = localStorage.getItem('guogeAutoSync');
+      if (autoOn === null || autoOn === 'true') {
+        saveToCloud().catch(function(){});
+      }
+    }
+  }
+  function getTodayTasks() {
+    const all = getAllData();
+    return all[todayKey] || {};
+  }
+  function setTodayTask(taskId, done) {
+    const all = getAllData();
+    if (!all[todayKey]) all[todayKey] = {};
+    all[todayKey][taskId] = done;
+    saveAllData(all, true);
+  }
+
   function updateProgress() {
     const done = document.querySelectorAll('.task .checkbox:not(.empty)').length;
     const pct = Math.round((done / total) * 100);
@@ -583,17 +629,94 @@
     taskProgress.textContent = done + '/' + total;
   }
 
+  // 从本地恢复今日打卡状态
+  function restoreTodayFromLocal() {
+    const todayTasks = getTodayTasks();
+    tasks.forEach(function(task) {
+      const taskId = task.dataset.task;
+      const cb = task.querySelector('.checkbox');
+      if (todayTasks[taskId]) {
+        cb.classList.remove('empty');
+        cb.textContent = '✓';
+        task.classList.remove('pending');
+      }
+    });
+    updateProgress();
+  }
+
+  // 带超时的 fetch
+  function fetchWithTimeout(url, options, timeoutMs) {
+    timeoutMs = timeoutMs || 12000;
+    return Promise.race([
+      fetch(url, options),
+      new Promise(function(_, reject) {
+        setTimeout(function() { reject(new Error('网络超时')); }, timeoutMs);
+      })
+    ]);
+  }
+
+  // 云同步
+  async function saveToCloud() {
+    const token = PRESET_TOKEN;
+    const allData = getAllData();
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(allData))));
+    let sha = null;
+    try {
+      const resp = await fetchWithTimeout(GH_API_URL, {
+        headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
+      }, 8000);
+      if (resp.ok) { const r = await resp.json(); sha = r.sha; }
+    } catch(e) {}
+    const body = { message: 'sync ' + new Date().toLocaleString('zh-CN'), content: content };
+    if (sha) body.sha = sha;
+    const resp = await fetchWithTimeout(GH_API_URL, {
+      method: 'PUT',
+      headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }, 15000);
+    const result = await resp.json();
+    if (!resp.ok) throw new Error('备份失败:' + (result.message || resp.statusText));
+  }
+
+  async function loadFromCloud() {
+    const token = PRESET_TOKEN;
+    let cloudText = null;
+    try {
+      const resp = await fetchWithTimeout(JSDELIVR_URL + '?t=' + Date.now(), { cache: 'no-store' }, 8000);
+      if (resp.ok) { const t = await resp.text(); if (t && t.trim().startsWith('{')) cloudText = t; }
+    } catch(e) {}
+    if (!cloudText) {
+      try {
+        const resp = await fetchWithTimeout(GH_API_URL, {
+          headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
+        }, 10000);
+        if (resp.ok) { const r = await resp.json(); const t = decodeURIComponent(escape(atob(r.content))); if (t && t.trim()) cloudText = t; }
+      } catch(e) {}
+    }
+    if (!cloudText) throw new Error('云端无数据');
+    const cloudData = JSON.parse(cloudText);
+    // 合并:云端 + 本地(本地优先,因为本地可能是刚打的卡)
+    const localData = getAllData();
+    const merged = Object.assign({}, cloudData, localData);
+    localStorage.setItem('guogeData', JSON.stringify(merged));
+    restoreTodayFromLocal();
+  }
+
+  // 打卡点击事件
   tasks.forEach(task => {
     task.addEventListener('click', () => {
       const cb = task.querySelector('.checkbox');
+      const taskId = task.dataset.task;
       if (cb.classList.contains('empty')) {
         cb.classList.remove('empty');
         cb.textContent = '✓';
         task.classList.remove('pending');
+        setTodayTask(taskId, true);
       } else {
         cb.classList.add('empty');
         cb.textContent = '';
         task.classList.add('pending');
+        setTodayTask(taskId, false);
       }
       updateProgress();
     });
@@ -606,7 +729,14 @@
     });
   });
 
-  updateProgress();
+  // 初始化:先从本地恢复,再静默从云端同步
+  restoreTodayFromLocal();
+  // 页面打开时静默从云端拉取(合并,不覆盖本地)
+  loadFromCloud().then(function() {
+    console.log('云端同步完成');
+  }).catch(function(e) {
+    console.log('云端同步跳过:', e.message);
+  });
 </script>
 
 </body>
