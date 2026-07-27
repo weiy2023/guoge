@@ -380,6 +380,19 @@
   <div class="tab" data-tab="sport"><span class="emoji">🏃</span>运动</div>
 </div>
 
+<!-- 日期选择 -->
+<div class="card" style="padding:12px 16px;margin-bottom:8px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+    <button id="prevDay" style="background:#f5f6fb;border:none;border-radius:8px;padding:10px 14px;font-size:18px;font-weight:600;color:#6c7bff;cursor:pointer;">‹</button>
+    <div style="flex:1;text-align:center;">
+      <input type="date" id="viewDate" style="border:none;font-size:17px;font-weight:600;color:#1f2330;text-align:center;background:transparent;width:100%;outline:none;">
+      <div id="viewDateInfo" style="font-size:12px;color:#8a90a8;margin-top:2px;"></div>
+    </div>
+    <button id="nextDay" style="background:#f5f6fb;border:none;border-radius:8px;padding:10px 14px;font-size:18px;font-weight:600;color:#6c7bff;cursor:pointer;">›</button>
+  </div>
+  <button id="goToday" style="width:100%;margin-top:8px;background:#e8eafd;color:#6c7bff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:600;cursor:pointer;">回到今天</button>
+</div>
+
 <!-- 今日完成进度 -->
 <div class="card progress-section">
   <div class="section-header">
@@ -654,14 +667,17 @@
       }
     }
   }
-  function getTodayTasks() {
+  // 当前查看的日期(默认今天,可以通过日期选择器切换)
+  let viewDateKey = todayKey;
+
+  function getDayTasks(dateKey) {
     const all = getAllData();
-    return all[todayKey] || {};
+    return all[dateKey] || {};
   }
-  function setTodayTask(taskId, done) {
+  function setDayTask(dateKey, taskId, done) {
     const all = getAllData();
-    if (!all[todayKey]) all[todayKey] = {};
-    all[todayKey][taskId] = done;
+    if (!all[dateKey]) all[dateKey] = {};
+    all[dateKey][taskId] = done;
     saveAllData(all, true);
   }
 
@@ -675,19 +691,55 @@
     renderWeekDays();
   }
 
-  // 从本地恢复今日打卡状态
-  function restoreTodayFromLocal() {
-    const todayTasks = getTodayTasks();
+  // 从本地恢复指定日期的打卡状态
+  function restoreDayFromLocal(dateKey) {
+    const dayTasks = getDayTasks(dateKey);
     tasks.forEach(function(task) {
       const taskId = task.dataset.task;
       const cb = task.querySelector('.checkbox');
-      if (todayTasks[taskId]) {
+      if (dayTasks[taskId]) {
         cb.classList.remove('empty');
         cb.textContent = '✓';
         task.classList.remove('pending');
+      } else {
+        cb.classList.add('empty');
+        cb.textContent = '';
+        task.classList.add('pending');
       }
     });
     updateProgress();
+  }
+
+  // 更新日期显示和标题
+  function updateDateDisplay() {
+    const [yy, mm, dd] = viewDateKey.split('-').map(Number);
+    const d = new Date(yy, mm - 1, dd);
+    document.getElementById('headerDate').textContent = mm + '月' + dd + '日';
+    document.getElementById('headerWeek').textContent = cnWeek(d);
+    document.getElementById('calendarIcon').innerHTML = mm + '月<span class="day">' + dd + '</span>';
+    document.getElementById('viewDate').value = viewDateKey;
+    // 显示"今天"或具体信息
+    const infoEl = document.getElementById('viewDateInfo');
+    if (viewDateKey === todayKey) {
+      infoEl.textContent = '今天 · ' + cnWeek(d);
+      infoEl.style.color = '#6c7bff';
+    } else {
+      // 计算是几天前/后
+      const diffDays = Math.round((d - today) / (1000*60*60*24));
+      let diffText = '';
+      if (diffDays > 0) diffText = diffDays + '天后';
+      else if (diffDays < 0) diffText = Math.abs(diffDays) + '天前';
+      else diffText = '今天';
+      infoEl.textContent = diffText + ' · ' + cnWeek(d);
+      infoEl.style.color = '#8a90a8';
+    }
+  }
+
+  // 切换到指定日期
+  function switchToDate(dateKey) {
+    viewDateKey = dateKey;
+    updateDateDisplay();
+    restoreDayFromLocal(dateKey);
   }
 
   // 带超时的 fetch
@@ -752,12 +804,12 @@
       merged[todayKey] = cloudData[todayKey];
     }
     localStorage.setItem('guogeData', JSON.stringify(merged));
-    restoreTodayFromLocal();
+    restoreDayFromLocal(viewDateKey);
     // 更新进度环显示
     updateProgress();
   }
 
-  // 打卡点击事件
+  // 打卡点击事件(用当前查看的日期)
   tasks.forEach(task => {
     task.addEventListener('click', () => {
       const cb = task.querySelector('.checkbox');
@@ -766,15 +818,35 @@
         cb.classList.remove('empty');
         cb.textContent = '✓';
         task.classList.remove('pending');
-        setTodayTask(taskId, true);
+        setDayTask(viewDateKey, taskId, true);
       } else {
         cb.classList.add('empty');
         cb.textContent = '';
         task.classList.add('pending');
-        setTodayTask(taskId, false);
+        setDayTask(viewDateKey, taskId, false);
       }
       updateProgress();
     });
+  });
+
+  // 日期切换按钮
+  document.getElementById('prevDay').addEventListener('click', function() {
+    const [yy, mm, dd] = viewDateKey.split('-').map(Number);
+    const d = new Date(yy, mm - 1, dd);
+    d.setDate(d.getDate() - 1);
+    switchToDate(fmtDate(d));
+  });
+  document.getElementById('nextDay').addEventListener('click', function() {
+    const [yy, mm, dd] = viewDateKey.split('-').map(Number);
+    const d = new Date(yy, mm - 1, dd);
+    d.setDate(d.getDate() + 1);
+    switchToDate(fmtDate(d));
+  });
+  document.getElementById('viewDate').addEventListener('change', function() {
+    if (this.value) switchToDate(this.value);
+  });
+  document.getElementById('goToday').addEventListener('click', function() {
+    switchToDate(todayKey);
   });
 
   document.querySelectorAll('.tab').forEach(tab => {
@@ -784,8 +856,9 @@
     });
   });
 
-  // 初始化:先从本地恢复,再静默从云端同步
-  restoreTodayFromLocal();
+  // 初始化:显示日期 + 从本地恢复 + 云端同步
+  updateDateDisplay();
+  restoreDayFromLocal(viewDateKey);
   // 页面打开时自动从云端拉取最新数据
   doSync();
   // 手动同步按钮
@@ -799,9 +872,10 @@
     statusEl.style.color = '#6c7bff';
     try {
       await loadFromCloud();
-      const todayTasks = getTodayTasks();
-      const done = Object.values(todayTasks).filter(function(v){return v;}).length;
-      statusEl.textContent = '✅ 已同步(' + new Date().toLocaleTimeString('zh-CN') + ')· 今日完成 ' + done + '/' + total;
+      const dayTasks = getDayTasks(viewDateKey);
+      const done = Object.values(dayTasks).filter(function(v){return v;}).length;
+      const dayLabel = viewDateKey === todayKey ? '今日' : viewDateKey;
+      statusEl.textContent = '✅ 已同步(' + new Date().toLocaleTimeString('zh-CN') + ')· ' + dayLabel + '完成 ' + done + '/' + total;
       statusEl.style.color = '#1aa260';
     } catch(e) {
       statusEl.textContent = '⚠️ 同步失败:' + e.message + '(打卡仍可正常使用,数据存在本地)';
