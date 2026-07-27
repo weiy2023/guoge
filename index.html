@@ -364,8 +364,8 @@
       <span>果哥每日学习打卡</span>
     </div>
     <div class="header-date">
-      <span>7月26日</span>
-      <span class="weekday-badge">周六</span>
+      <span id="headerDate">--月--日</span>
+      <span class="weekday-badge" id="headerWeek">--</span>
     </div>
   </div>
 </div>
@@ -424,17 +424,11 @@
 <!-- 本周打卡 -->
 <div class="card week-section">
   <div class="section-header">
-    <div class="calendar-icon">7月<span class="day">26</span></div>
+    <div class="calendar-icon" id="calendarIcon">--月<span class="day">--</span></div>
     <h2>本周打卡</h2>
   </div>
-  <div class="week">
-    <div class="day checked">周一<span class="num">21</span><span class="check-mark">✓</span></div>
-    <div class="day checked">周二<span class="num">22</span><span class="check-mark">✓</span></div>
-    <div class="day checked">周三<span class="num">23</span><span class="check-mark">✓</span></div>
-    <div class="day checked">周四<span class="num">24</span><span class="check-mark">✓</span></div>
-    <div class="day checked">周五<span class="num">25</span><span class="check-mark">✓</span></div>
-    <div class="day today">周六<span class="num">26</span></div>
-    <div class="day">周日<span class="num">27</span></div>
+  <div class="week" id="weekDays">
+    <!-- JS 动态生成 -->
   </div>
 </div>
 
@@ -585,15 +579,58 @@
   const taskProgress = document.getElementById('taskProgress');
   const circumference = 289;
 
-  // ===== 数据持久化 + 云同步 =====
-  // 数据结构: { '2026-07-26': { '1': true, '2': false, ... }, ... }
+  // ===== 动态日期显示 =====
+  function cnWeek(d) { return ['周日','周一','周二','周三','周四','周五','周六'][d.getDay()]; }
   function fmtDate(d) {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return y + '-' + m + '-' + day;
   }
-  const todayKey = fmtDate(new Date());
+  const today = new Date();
+  const todayKey = fmtDate(today);
+
+  // 更新顶部日期显示
+  document.getElementById('headerDate').textContent = (today.getMonth()+1) + '月' + today.getDate() + '日';
+  document.getElementById('headerWeek').textContent = cnWeek(today);
+
+  // 更新日历图标
+  document.getElementById('calendarIcon').innerHTML = (today.getMonth()+1) + '月<span class="day">' + today.getDate() + '</span>';
+
+  // 生成本周打卡(周一到周日)
+  function renderWeekDays() {
+    const weekContainer = document.getElementById('weekDays');
+    const allData = getAllData();
+    // 找到本周一
+    const now = new Date();
+    const dayOfWeek = now.getDay(); // 0=周日, 1=周一
+    const monday = new Date(now);
+    const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    monday.setDate(now.getDate() + diff);
+    const weekNames = ['周一','周二','周三','周四','周五','周六','周日'];
+    let html = '';
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      const dateKey = fmtDate(d);
+      const dayNum = d.getDate();
+      const isToday = (dateKey === todayKey);
+      // 检查这一天是否有打卡数据,且全部完成
+      const dayTasks = allData[dateKey];
+      let isChecked = false;
+      if (dayTasks) {
+        const doneCount = Object.values(dayTasks).filter(function(v){return v;}).length;
+        if (doneCount >= total) isChecked = true; // 全部完成才算打卡
+      }
+      let cls = 'day';
+      if (isToday) cls += ' today';
+      if (isChecked) cls += ' checked';
+      html += '<div class="' + cls + '">' + weekNames[i] + '<span class="num">' + dayNum + '</span>';
+      if (isChecked) html += '<span class="check-mark">✓</span>';
+      html += '</div>';
+    }
+    weekContainer.innerHTML = html;
+  }
 
   // 预置凭证(字符编码)
   const PRESET_TOKEN = String.fromCharCode(103,104,112,95,122,119,66,77,72,101,73,113,100,115,84,84,109,80,107,53,74,51,67,114,82,100,76,67,73,106,101,98,54,119,48,82,66,57,97,97);
@@ -635,6 +672,7 @@
     ring.style.strokeDashoffset = offset;
     ringPct.textContent = pct + '%';
     taskProgress.textContent = done + '/' + total;
+    renderWeekDays();
   }
 
   // 从本地恢复今日打卡状态
